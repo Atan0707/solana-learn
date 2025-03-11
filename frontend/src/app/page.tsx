@@ -1,5 +1,4 @@
 import CounterProgram from "@/components/CounterProgram";
-import Link from "next/link";
 
 export default function Home() {
   return (
@@ -11,15 +10,6 @@ export default function Home() {
       
       <main className="w-full max-w-md">
         <CounterProgram />
-        
-        <div className="mt-8 text-center">
-          <Link 
-            href="/simple-counter" 
-            className="inline-block bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded transition-colors"
-          >
-            Try Simple Counter Version
-          </Link>
-        </div>
       </main>
       
       <footer className="mt-12 text-center text-sm text-gray-500 dark:text-gray-400">

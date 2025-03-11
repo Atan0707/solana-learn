@@ -1,198 +1,202 @@
-'use client';
+'use client'
 
-import React, { useState, useEffect } from "react";
-import { useAnchorWallet, useConnection } from "@solana/wallet-adapter-react";
-import { Program, AnchorProvider, web3 } from "@coral-xyz/anchor";
-import { PublicKey } from "@solana/web3.js";
-import dynamic from 'next/dynamic';
-import idl from "@/idl/contract.json";
+import { FC, useEffect, useState } from 'react'
+import { Connection, PublicKey, Keypair } from '@solana/web3.js'
+import { useAnchorWallet } from '@solana/wallet-adapter-react'
+import { Program, AnchorProvider, web3, Idl } from '@coral-xyz/anchor'
+import { idl, CounterAccount } from '@/idl/contract'
+import Button from '@/components/ui/button'
 
-// Dynamically import the WalletMultiButton with SSR disabled to prevent hydration errors
-const WalletMultiButton = dynamic(
-  () => import('@solana/wallet-adapter-react-ui').then(mod => mod.WalletMultiButton),
-  { ssr: false }
-);
+// Define a type for our program with the expected account structure
+type CounterProgram = Program<Idl> & {
+  account: {
+    counter: {
+      fetch(address: PublicKey): Promise<CounterAccount>
+    }
+  }
+}
 
-// Set our program ID from the IDL
-const programID = new PublicKey(idl.address);
+const CounterProgram: FC = () => {
+  const wallet = useAnchorWallet()
+  const [counter, setCounter] = useState<number>(0)
+  const [loading, setLoading] = useState<boolean>(false)
+  const [counterAccount, setCounterAccount] = useState<Keypair | null>(null)
+  const [initialized, setInitialized] = useState<boolean>(false)
 
-// Generate a unique counter address for the current user
-const getCounterAddress = async (wallet: PublicKey | null) => {
-  if (!wallet) return null;
-  
-  const [counterPDA] = PublicKey.findProgramAddressSync(
-    [Buffer.from("counter"), wallet.toBuffer()],
-    programID
-  );
-  
-  return counterPDA;
-};
+  // Get the connection from the Solana cluster
+  const connection = new Connection(web3.clusterApiUrl('devnet'), 'confirmed')
 
-const Counter = () => {
-  const { connection } = useConnection();
-  const wallet = useAnchorWallet();
-  const [count, setCount] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [initialized, setInitialized] = useState(false);
-  const [counterAddress, setCounterAddress] = useState<PublicKey | null>(null);
-
-  // Function to create an Anchor provider and program
-  const getProgram = () => {
-    if (!wallet) return null;
-    const provider = new AnchorProvider(
-      connection,
-      wallet,
-      AnchorProvider.defaultOptions()
-    );
-    return new Program(idl, programID, provider);
-  };
-
-  // Initialize the counter account
-  const initializeCounter = async () => {
-    try {
-      setLoading(true);
-      const program = getProgram();
-      if (!wallet || !program) return;
-
-      const counterAddr = await getCounterAddress(wallet.publicKey);
-      if (!counterAddr) return;
+  // Generate a new keypair for the counter account
+  useEffect(() => {
+    // Create a keypair for the counter account
+    const generateCounterAccount = () => {
+      if (!wallet) return
       
-      setCounterAddress(counterAddr);
+      // Generate a new keypair for the counter
+      const keypair = Keypair.generate();
+      setCounterAccount(keypair);
+    }
 
-      // Create new account for the counter
+    generateCounterAccount()
+  }, [wallet])
+
+  // Fetch counter data
+  const fetchCounter = async () => {
+    if (!wallet || !counterAccount) return
+
+    try {
+      setLoading(true)
+      const provider = new AnchorProvider(
+        connection,
+        wallet,
+        AnchorProvider.defaultOptions()
+      )
+
+      const program = new Program(idl, provider) as CounterProgram
+
+      try {
+        // Try to fetch the counter account
+        const counterData = await program.account.counter.fetch(counterAccount.publicKey)
+        setCounter(Number(counterData.count))
+        setInitialized(true)
+      } catch (error: unknown) {
+        // Silently catch error when counter is not initialized
+        console.log('Counter not initialized yet:', error instanceof Error ? error.message : String(error))
+        setInitialized(false)
+      }
+    } catch (err) {
+      console.error('Error fetching counter:', err)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // Initialize counter
+  const initializeCounter = async () => {
+    if (!wallet || !counterAccount) return
+
+    try {
+      setLoading(true)
+      const provider = new AnchorProvider(
+        connection,
+        wallet,
+        AnchorProvider.defaultOptions()
+      )
+
+      const program = new Program(idl, provider) as CounterProgram
+
+      // Create the transaction to initialize the counter
       await program.methods
         .initialize()
         .accounts({
-          counter: counterAddr,
+          counter: counterAccount.publicKey,
           authority: wallet.publicKey,
           systemProgram: web3.SystemProgram.programId,
         })
-        .rpc();
+        .signers([counterAccount])
+        .rpc()
 
-      console.log("Counter initialized!");
-      setInitialized(true);
-      fetchCounter();
-    } catch (error) {
-      console.error("Error initializing counter:", error);
+      // Fetch the counter after initialization
+      await fetchCounter()
+    } catch (err) {
+      console.error('Error initializing counter:', err)
     } finally {
-      setLoading(false);
+      setLoading(false)
     }
-  };
+  }
 
-  // Increment the counter
+  // Increment counter
   const incrementCounter = async () => {
-    try {
-      setLoading(true);
-      const program = getProgram();
-      if (!wallet || !program || !counterAddress) return;
+    if (!wallet || !counterAccount) return
 
+    try {
+      setLoading(true)
+      const provider = new AnchorProvider(
+        connection,
+        wallet,
+        AnchorProvider.defaultOptions()
+      )
+
+      const program = new Program(idl, provider) as CounterProgram
+
+      // Create the transaction to increment the counter
       await program.methods
         .increment()
         .accounts({
-          counter: counterAddress,
+          counter: counterAccount.publicKey,
           authority: wallet.publicKey,
         })
-        .rpc();
+        .rpc()
 
-      console.log("Counter incremented!");
-      fetchCounter();
-    } catch (error) {
-      console.error("Error incrementing counter:", error);
+      // Fetch the counter after incrementing
+      await fetchCounter()
+    } catch (err) {
+      console.error('Error incrementing counter:', err)
     } finally {
-      setLoading(false);
+      setLoading(false)
     }
-  };
+  }
 
-  // Fetch the current counter value
-  const fetchCounter = async () => {
-    try {
-      const program = getProgram();
-      if (!program || !counterAddress) return;
-
-      try {
-        // @ts-expect-error - The program.account.counter property and counterAccount.count property exist at runtime
-        const counterAccount = await program.account.counter.fetch(counterAddress);
-        setCount(counterAccount.count.toString());
-        setInitialized(true);
-      } catch (error) {
-        console.error("Error fetching counter account:", error);
-        setInitialized(false);
-      }
-    } catch (error) {
-      console.error("Error fetching counter:", error);
-      setInitialized(false);
-    }
-  };
-
-  // Effect to check if counter is initialized and fetch its value
+  // Fetch counter on component mount and when wallet changes
   useEffect(() => {
-    const checkAndFetchCounter = async () => {
-      if (wallet) {
-        const addr = await getCounterAddress(wallet.publicKey);
-        if (addr) {
-          setCounterAddress(addr);
-          
-          try {
-            await fetchCounter();
-          } catch {
-            // If there's an error, the counter is not initialized
-            setInitialized(false);
-          }
-        }
-      }
-    };
-    
-    checkAndFetchCounter();
-  }, [wallet]);
+    if (wallet && counterAccount) {
+      fetchCounter()
+    }
+  }, [wallet, counterAccount])
+
+  if (!wallet) {
+    return (
+      <div className="p-6 bg-white dark:bg-gray-800 rounded-lg shadow-md text-center">
+        <h2 className="text-xl font-semibold mb-4 text-gray-800 dark:text-white">Solana Counter</h2>
+        <p className="text-gray-600 dark:text-gray-300 mb-4">Please connect your wallet to interact with the counter.</p>
+      </div>
+    )
+  }
 
   return (
-    <div className="flex flex-col items-center gap-6 p-8 bg-white dark:bg-gray-800 rounded-lg shadow-md max-w-md w-full">
-      <h1 className="text-2xl font-bold text-gray-800 dark:text-white">Solana Counter dApp</h1>
+    <div className="p-6 bg-white dark:bg-gray-800 rounded-lg shadow-md">
+      <h2 className="text-xl font-semibold mb-4 text-center text-gray-800 dark:text-white">Solana Counter</h2>
       
-      <div className="w-full">
-        <WalletMultiButton className="w-full bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded transition-colors" />
-      </div>
-      
-      {wallet ? (
-        <div className="w-full flex flex-col gap-4 items-center">
-          <div className="text-center">
-            <p className="text-gray-600 dark:text-gray-300">Connected as:</p>
-            <p className="font-mono text-sm truncate max-w-xs">{wallet.publicKey.toString()}</p>
-          </div>
-          
-          {initialized ? (
-            <div className="flex flex-col items-center gap-4 w-full">
-              <div className="bg-gray-100 dark:bg-gray-700 p-6 rounded-lg w-full text-center">
-                <p className="text-gray-600 dark:text-gray-300">Current Count:</p>
-                <p className="text-4xl font-bold text-purple-600 dark:text-purple-400">{count !== null ? count : "..."}</p>
-              </div>
-              
-              <button
-                onClick={incrementCounter}
-                disabled={loading}
-                className="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-4 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {loading ? "Processing..." : "Increment Counter"}
-              </button>
-            </div>
-          ) : (
-            <div className="flex flex-col items-center gap-4 w-full">
-              <p className="text-gray-600 dark:text-gray-300">Counter not initialized yet.</p>
-              <button
-                onClick={initializeCounter}
-                disabled={loading}
-                className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {loading ? "Processing..." : "Initialize Counter"}
-              </button>
-            </div>
-          )}
+      <div className="flex flex-col items-center justify-center space-y-6">
+        <div className="text-center">
+          <div className="text-5xl font-bold mb-2 text-gray-800 dark:text-white">{counter}</div>
+          <p className="text-sm text-gray-500 dark:text-gray-400">Current Count</p>
         </div>
-      ) : (
-        <p className="text-gray-600 dark:text-gray-300">Connect your wallet to interact with the counter program.</p>
-      )}
-    </div>
-  );
-};
 
-export default Counter;
+        <div className="flex flex-col space-y-3 w-full">
+          {!initialized ? (
+            <Button
+              onClick={initializeCounter}
+              disabled={loading}
+              variant="primary"
+              className="w-full"
+            >
+              {loading ? 'Initializing...' : 'Initialize Counter'}
+            </Button>
+          ) : (
+            <Button
+              onClick={incrementCounter}
+              disabled={loading}
+              variant="secondary"
+              className="w-full"
+            >
+              {loading ? 'Processing...' : 'Increment Counter'}
+            </Button>
+          )}
+          
+          <Button
+            onClick={fetchCounter}
+            disabled={loading}
+            variant="outline"
+            className="w-full"
+          >
+            {loading ? 'Refreshing...' : 'Refresh Counter'}
+          </Button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+export default CounterProgram
+
