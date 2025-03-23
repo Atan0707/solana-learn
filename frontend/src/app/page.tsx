@@ -1,4 +1,5 @@
 import CounterProgram from "@/components/CounterProgram";
+import WalletButton from "@/components/WalletButton";
 
 export default function Home() {
   return (
@@ -7,6 +8,10 @@ export default function Home() {
         <h1 className="text-4xl font-bold text-gray-800 dark:text-white mb-2">Solana Counter dApp</h1>
         <p className="text-gray-600 dark:text-gray-300">Interact with a Solana smart contract</p>
       </header>
+      
+      <div className="mb-6 w-full max-w-md">
+        <WalletButton />
+      </div>
       
       <main className="w-full max-w-md">
         <CounterProgram />
