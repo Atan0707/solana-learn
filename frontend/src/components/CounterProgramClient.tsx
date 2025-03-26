@@ -1,269 +1,280 @@
-'use client'
+'use client';
 
-import { FC, useEffect, useState } from 'react'
-import { Connection, PublicKey, Keypair } from '@solana/web3.js'
-import { useAnchorWallet } from '@solana/wallet-adapter-react'
-import { Program, AnchorProvider, web3, Idl } from '@coral-xyz/anchor'
-import { idl, CounterAccount } from '@/idl/contract'
-import Button from '@/components/ui/button'
+import { FC, useEffect, useState, useCallback } from 'react';
+import { useWallet, useConnection } from '@solana/wallet-adapter-react';
+import { Program, AnchorProvider, web3, BN, Idl } from '@coral-xyz/anchor';
+import { PublicKey } from '@solana/web3.js';
+import contractIDL from '../idl/contract.json';
+// Create types based on the IDL
+type Counter = {
+  count: BN;
+  authority: PublicKey;
+};
 
-// Define a type for our program with the expected account structure
-type CounterProgram = Program<Idl> & {
-  account: {
-    counter: {
-      fetch(address: PublicKey): Promise<CounterAccount>
-    }
-  }
-}
+const idl = contractIDL as Idl;
+const programId = new PublicKey(idl.address);
 
 const CounterProgramClient: FC = () => {
-  const wallet = useAnchorWallet()
-  const [counter, setCounter] = useState<number>(0)
-  const [loading, setLoading] = useState<boolean>(false)
-  const [counterAccount, setCounterAccount] = useState<Keypair | null>(null)
-  const [initialized, setInitialized] = useState<boolean>(false)
+  const { connection } = useConnection();
+  const { publicKey, sendTransaction, signAllTransactions, signTransaction } = useWallet();
+  
+  const [count, setCount] = useState<number | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [txSignature, setTxSignature] = useState<string | null>(null);
 
-  // Get the connection from the Solana cluster
-  const connection = new Connection(web3.clusterApiUrl('devnet'), 'confirmed')
-
-  // Generate a new keypair for the counter account
-  useEffect(() => {
-    // Create a keypair for the counter account or retrieve from localStorage
-    const getOrCreateCounterAccount = () => {
-      if (!wallet) return
-      
-      // Check if we have a stored keypair in localStorage
-      const storedKeypair = localStorage.getItem('counterAccountKeypair')
-      
-      if (storedKeypair) {
-        try {
-          // Recreate the keypair from the stored secret key
-          const secretKey = new Uint8Array(JSON.parse(storedKeypair))
-          const keypair = Keypair.fromSecretKey(secretKey)
-          setCounterAccount(keypair)
-          console.log('Retrieved counter account from localStorage:', keypair.publicKey.toString())
-        } catch (error) {
-          console.error('Error loading keypair from localStorage:', error)
-          createNewKeypair()
-        }
-      } else {
-        createNewKeypair()
-      }
+  // Create the provider that will be used to create the program
+  const getProvider = useCallback(() => {
+    if (!publicKey || !signAllTransactions || !signTransaction) {
+      return null;
     }
     
-    const createNewKeypair = () => {
-      // Generate a new keypair for the counter
-      const keypair = Keypair.generate()
-      // Store the secret key in localStorage
-      localStorage.setItem('counterAccountKeypair', JSON.stringify(Array.from(keypair.secretKey)))
-      setCounterAccount(keypair)
-      console.log('Created new counter account:', keypair.publicKey.toString())
+    return new AnchorProvider(
+      connection,
+      {
+        publicKey,
+        signAllTransactions,
+        signTransaction,
+      },
+      { commitment: 'confirmed' }
+    );
+  }, [connection, publicKey, signAllTransactions, signTransaction]);
+
+  // Create the program
+  const getProgram = useCallback(() => {
+    const provider = getProvider();
+    if (!provider) {
+      return null;
     }
+    
+    return new Program(idl, provider);
+  }, [getProvider]);
 
-    getOrCreateCounterAccount()
-  }, [wallet])
+  // Get the counter account address
+  const getCounterAccount = useCallback(async () => {
+    if (!publicKey) return null;
+    
+    const program = getProgram();
+    if (!program) return null;
+    
+    const [counterPDA] = PublicKey.findProgramAddressSync(
+      [Buffer.from('counter'), publicKey.toBuffer()],
+      program.programId
+    );
+    
+    return counterPDA;
+  }, [getProgram, publicKey]);
 
-  // Fetch counter data
-  const fetchCounter = async () => {
-    if (!wallet || !counterAccount) return
-
+  // Fetch counter value
+  const fetchCounter = useCallback(async () => {
+    if (!publicKey) {
+      setCount(null);
+      return;
+    }
+    
     try {
-      setLoading(true)
-      const provider = new AnchorProvider(
-        connection,
-        wallet,
-        AnchorProvider.defaultOptions()
-      )
-
-      const program = new Program(idl, provider) as CounterProgram
-
+      setIsLoading(true);
+      setError(null);
+      
+      const program = getProgram();
+      if (!program) {
+        throw new Error('Program not available');
+      }
+      
+      const counterAccount = await getCounterAccount();
+      if (!counterAccount) {
+        throw new Error('Failed to derive counter account address');
+      }
+      
       try {
-        // Try to fetch the counter account
-        const counterData = await program.account.counter.fetch(counterAccount.publicKey)
-        console.log('Counter data:', counterData)
-        setCounter(Number(counterData.count))
-        console.log('Counter:', counter)
-        console.log('Counter account:', counterAccount.publicKey.toString())
-        setInitialized(true)
-      } catch (error: unknown) {
-        // Silently catch error when counter is not initialized
-        console.log('Counter not initialized yet:', error instanceof Error ? error.message : String(error))
-        setInitialized(false)
+        // @ts-expect-error - we know this account exists in the IDL
+        const counterData = await program.account.counter.fetch(counterAccount) as Counter;
+        setCount(counterData.count.toNumber());
+      } catch (err) {
+        // If the account doesn't exist yet, that's okay
+        if (err instanceof Error && err.message?.includes('Account does not exist')) {
+          setCount(null);
+        } else {
+          throw err;
+        }
       }
     } catch (err) {
-      console.error('Error fetching counter:', err)
+      console.error('Fetch error:', err);
+      setError(`Failed to fetch counter: ${err instanceof Error ? err.message : String(err)}`);
+      setCount(null);
     } finally {
-      setLoading(false)
+      setIsLoading(false);
     }
-  }
+  }, [publicKey, getProgram, getCounterAccount]);
 
-  // Initialize counter
-  const initializeCounter = async () => {
-    if (!wallet || !counterAccount) return
-
+  // Initialize counter account
+  const initializeCounter = useCallback(async () => {
+    if (!publicKey) {
+      setError('Wallet not connected');
+      return;
+    }
+    
     try {
-      setLoading(true)
-      const provider = new AnchorProvider(
-        connection,
-        wallet,
-        AnchorProvider.defaultOptions()
-      )
-
-      const program = new Program(idl, provider) as CounterProgram
-
-      console.log('Initializing with authority:', wallet.publicKey.toString())
-      console.log('Counter account:', counterAccount.publicKey.toString())
+      setIsLoading(true);
+      setError(null);
       
-      // Create the transaction to initialize the counter
-      await program.methods
+      const program = getProgram();
+      if (!program) {
+        throw new Error('Program not available');
+      }
+      
+      const counterAccount = await getCounterAccount();
+      if (!counterAccount) {
+        throw new Error('Failed to derive counter account address');
+      }
+      
+      const tx = await program.methods
         .initialize()
         .accounts({
-          counter: counterAccount.publicKey,
-          authority: wallet.publicKey,
+          counter: counterAccount,
+          authority: publicKey,
           systemProgram: web3.SystemProgram.programId,
         })
-        .signers([counterAccount])
-        .rpc()
-
-      // Fetch the counter after initialization
-      await fetchCounter()
+        .transaction();
+      
+      const signature = await sendTransaction(tx, connection);
+      setTxSignature(signature);
+      
+      // Wait for confirmation
+      await connection.confirmTransaction(signature, 'confirmed');
+      
+      // Read the counter value after initialization
+      await fetchCounter();
+      
     } catch (err) {
-      console.error('Error initializing counter:', err)
+      console.error('Initialize error:', err);
+      setError(`Failed to initialize counter: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
-      setLoading(false)
+      setIsLoading(false);
     }
-  }
+  }, [publicKey, getProgram, getCounterAccount, sendTransaction, connection, fetchCounter]);
 
   // Increment counter
-  const incrementCounter = async () => {
-    if (!wallet || !counterAccount) return
-
+  const incrementCounter = useCallback(async () => {
+    if (!publicKey) {
+      setError('Wallet not connected');
+      return;
+    }
+    
     try {
-      setLoading(true)
-      const provider = new AnchorProvider(
-        connection,
-        wallet,
-        AnchorProvider.defaultOptions()
-      )
-
-      const program = new Program(idl, provider) as CounterProgram
-
-      // Check if counter is initialized first
-      try {
-        await program.account.counter.fetch(counterAccount.publicKey)
-      } catch (error) {
-        console.error('Counter not initialized or authority mismatch:', error)
-        setInitialized(false)
-        setLoading(false)
-        return
-      }
-
-      console.log('Incrementing with authority:', wallet.publicKey.toString())
+      setIsLoading(true);
+      setError(null);
       
-      // Create the transaction to increment the counter
-      await program.methods
+      const program = getProgram();
+      if (!program) {
+        throw new Error('Program not available');
+      }
+      
+      const counterAccount = await getCounterAccount();
+      if (!counterAccount) {
+        throw new Error('Failed to derive counter account address');
+      }
+      
+      const tx = await program.methods
         .increment()
         .accounts({
-          counter: counterAccount.publicKey,
-          authority: wallet.publicKey,
+          counter: counterAccount,
+          authority: publicKey,
         })
-        .rpc()
-
-      // Fetch the counter after incrementing
-      await fetchCounter()
+        .transaction();
+      
+      const signature = await sendTransaction(tx, connection);
+      setTxSignature(signature);
+      
+      // Wait for confirmation
+      await connection.confirmTransaction(signature, 'confirmed');
+      
+      // Read the updated counter value
+      await fetchCounter();
+      
     } catch (err) {
-      console.error('Error incrementing counter:', err)
+      console.error('Increment error:', err);
+      setError(`Failed to increment counter: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
-      setLoading(false)
+      setIsLoading(false);
     }
-  }
+  }, [publicKey, getProgram, getCounterAccount, sendTransaction, connection, fetchCounter]);
 
-  // Fetch counter on component mount and when wallet changes
+  // Fetch the counter value when wallet connects
   useEffect(() => {
-    if (wallet && counterAccount) {
-      fetchCounter()
-    }
-  }, [wallet, counterAccount])
+    fetchCounter();
+  }, [fetchCounter, publicKey]);
 
-  // Reset counter account (create a new one)
-  const resetCounterAccount = () => {
-    if (!wallet) return
-    
-    // Generate a new keypair
-    const keypair = Keypair.generate()
-    // Store the new secret key in localStorage
-    localStorage.setItem('counterAccountKeypair', JSON.stringify(Array.from(keypair.secretKey)))
-    setCounterAccount(keypair)
-    setInitialized(false)
-    setCounter(0)
-    console.log('Reset counter account to:', keypair.publicKey.toString())
+  if (!publicKey) {
+    return (
+      <div className="flex flex-col items-center p-6 bg-white dark:bg-gray-800 rounded-lg shadow-md">
+        <p className="text-gray-700 dark:text-gray-300 text-center">
+          Connect your wallet to interact with the counter program
+        </p>
+      </div>
+    );
   }
 
   return (
-    <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-6">
+    <div className="flex flex-col p-6 bg-white dark:bg-gray-800 rounded-lg shadow-md">
       <h2 className="text-2xl font-bold text-gray-800 dark:text-white mb-4">Counter Program</h2>
       
-      {!wallet ? (
-        <div className="text-center p-4 bg-yellow-50 dark:bg-yellow-900/20 rounded-lg">
-          <p className="text-yellow-700 dark:text-yellow-300">
-            Please connect your wallet to interact with the counter program
-          </p>
-        </div>
-      ) : (
-        <div className="space-y-4">
-          <div className="flex justify-between items-center">
-            <span className="text-gray-600 dark:text-gray-300">Current Count:</span>
-            <span className="text-2xl font-bold text-gray-800 dark:text-white">{counter}</span>
-          </div>
-          
-          {counterAccount && (
-            <div className="text-xs text-gray-500 dark:text-gray-400 break-all bg-gray-100 dark:bg-gray-700 p-2 rounded">
-              <span className="font-semibold">Counter Account:</span> {counterAccount.publicKey.toString()}
-            </div>
-          )}
-          
-          <div className="flex flex-col space-y-2">
-            <Button 
-              onClick={incrementCounter}
-              disabled={loading || !initialized}
-              className="w-full"
-            >
-              Increment Counter
-            </Button>
-            
-            {!initialized && (
-              <Button 
-                onClick={initializeCounter}
-                disabled={loading}
-                className="w-full"
-              >
-                Initialize Counter
-              </Button>
-            )}
-          </div>
-          
-          {loading && (
-            <div className="text-center p-2">
-              <p className="text-sm text-gray-500 dark:text-gray-400">Processing transaction...</p>
-            </div>
-          )}
-          
-          <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
-            <Button 
-              onClick={resetCounterAccount}
-              variant="outline"
-              className="w-full text-sm"
-            >
-              Reset Counter Account
-            </Button>
-            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 text-center">
-              This will create a new counter account and reset the state
-            </p>
-          </div>
+      {error && (
+        <div className="mb-4 p-3 bg-red-100 dark:bg-red-900/20 text-red-700 dark:text-red-300 rounded-md">
+          {error}
         </div>
       )}
+      
+      {txSignature && (
+        <div className="mb-4 p-3 bg-green-100 dark:bg-green-900/20 text-green-700 dark:text-green-300 rounded-md text-sm">
+          <p>Transaction submitted!</p>
+          <a 
+            href={`https://explorer.solana.com/tx/${txSignature}?cluster=devnet`}
+            target="_blank" 
+            rel="noopener noreferrer"
+            className="underline hover:text-green-800 dark:hover:text-green-200"
+          >
+            View on Solana Explorer
+          </a>
+        </div>
+      )}
+      
+      <div className="mb-6 flex flex-col items-center">
+        <div className="text-4xl font-bold text-gray-800 dark:text-white mb-2">
+          {count !== null ? count : 'Not initialized'}
+        </div>
+        <p className="text-gray-600 dark:text-gray-400">Current count</p>
+      </div>
+      
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        {count === null ? (
+          <button
+            onClick={initializeCounter}
+            disabled={isLoading}
+            className="w-full py-2 px-4 bg-blue-600 hover:bg-blue-700 text-white rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {isLoading ? 'Initializing...' : 'Initialize Counter'}
+          </button>
+        ) : (
+          <button
+            onClick={incrementCounter}
+            disabled={isLoading}
+            className="w-full py-2 px-4 bg-blue-600 hover:bg-blue-700 text-white rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {isLoading ? 'Processing...' : 'Increment Counter'}
+          </button>
+        )}
+        
+        <button
+          onClick={fetchCounter}
+          disabled={isLoading}
+          className="w-full py-2 px-4 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-white rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {isLoading ? 'Loading...' : 'Refresh Count'}
+        </button>
+      </div>
     </div>
-  )
-}
+  );
+};
 
-export default CounterProgramClient 
+export default CounterProgramClient;

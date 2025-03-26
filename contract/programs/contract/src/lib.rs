@@ -28,7 +28,13 @@ pub mod contract {
 
 #[derive(Accounts)]
 pub struct Initialize<'info> {
-    #[account(init, payer = authority, space = 8 + 8 + 32)]
+    #[account(
+        init, 
+        payer = authority, 
+        space = 8 + 8 + 32,
+        seeds = [b"counter", authority.key().as_ref()],
+        bump
+    )]
     pub counter: Account<'info, Counter>,
     #[account(mut)]
     pub authority: Signer<'info>,
@@ -37,7 +43,7 @@ pub struct Initialize<'info> {
 
 #[derive(Accounts)]
 pub struct Increment<'info> {
-    #[account(mut, has_one = authority)]
+    #[account(mut)]
     pub counter: Account<'info, Counter>,
     pub authority: Signer<'info>,
 }
