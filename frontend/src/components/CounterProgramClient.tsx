@@ -12,7 +12,7 @@ type Counter = {
 };
 
 const idl = contractIDL as Idl;
-const programId = new PublicKey(idl.address);
+// const programId = new PublicKey(idl.address);
 
 const CounterProgramClient: FC = () => {
   const { connection } = useConnection();
