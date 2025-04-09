@@ -141,7 +141,14 @@ const CounterProgramClient: FC = () => {
       setTxSignature(signature);
       
       // Wait for confirmation
-      await connection.confirmTransaction(signature, 'confirmed');
+      await connection.confirmTransaction(
+        {
+          blockhash: (await connection.getLatestBlockhash()).blockhash,
+          lastValidBlockHeight: (await connection.getLatestBlockhash()).lastValidBlockHeight,
+          signature,
+        },
+        'confirmed'
+      );
       
       // Read the counter value after initialization
       await fetchCounter();
@@ -187,14 +194,73 @@ const CounterProgramClient: FC = () => {
       setTxSignature(signature);
       
       // Wait for confirmation
-      await connection.confirmTransaction(signature, 'confirmed');
-      
+      await connection.confirmTransaction(
+        {
+          blockhash: (await connection.getLatestBlockhash()).blockhash,
+          lastValidBlockHeight: (await connection.getLatestBlockhash()).lastValidBlockHeight,
+          signature,
+        },
+        'confirmed'
+      );
       // Read the updated counter value
       await fetchCounter();
       
     } catch (err) {
       console.error('Increment error:', err);
       setError(`Failed to increment counter: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [publicKey, getProgram, getCounterAccount, sendTransaction, connection, fetchCounter]);
+
+  // Decrement counter
+  const decrementCounter = useCallback(async () => {
+    if (!publicKey) {
+      setError('Wallet not connected');
+      return;
+    }
+    
+    try {
+      setIsLoading(true);
+      setError(null);
+      
+      const program = getProgram();
+      if (!program) {
+        throw new Error('Program not available');
+      }
+      
+      const counterAccount = await getCounterAccount();
+      if (!counterAccount) {
+        throw new Error('Failed to derive counter account address');
+      }
+      
+      const tx = await program.methods
+        .decrement()
+        .accounts({
+          counter: counterAccount,
+          authority: publicKey,
+        })
+        .transaction();
+      
+      const signature = await sendTransaction(tx, connection);
+      setTxSignature(signature);
+      
+      // Wait for confirmation
+      await connection.confirmTransaction(
+        {
+          blockhash: (await connection.getLatestBlockhash()).blockhash,
+          lastValidBlockHeight: (await connection.getLatestBlockhash()).lastValidBlockHeight,
+          signature,
+        },
+        'confirmed'
+      );
+      
+      // Read the updated counter value
+      await fetchCounter();
+      
+    } catch (err) {
+      console.error('Decrement error:', err);
+      setError(`Failed to decrement counter: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setIsLoading(false);
     }
@@ -256,13 +322,22 @@ const CounterProgramClient: FC = () => {
             {isLoading ? 'Initializing...' : 'Initialize Counter'}
           </button>
         ) : (
-          <button
-            onClick={incrementCounter}
-            disabled={isLoading}
-            className="w-full py-2 px-4 bg-blue-600 hover:bg-blue-700 text-white rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {isLoading ? 'Processing...' : 'Increment Counter'}
-          </button>
+          <div className="grid grid-cols-2 gap-4">
+            <button
+              onClick={incrementCounter}
+              disabled={isLoading}
+              className="w-full py-2 px-4 bg-blue-600 hover:bg-blue-700 text-white rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {isLoading ? 'Processing...' : 'Increment Counter'}
+            </button>
+            <button
+              onClick={decrementCounter}
+              disabled={isLoading}
+              className="w-full py-2 px-4 bg-blue-600 hover:bg-blue-700 text-white rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {isLoading ? 'Processing...' : 'Decrement Counter'}
+            </button>
+          </div>
         )}
         
         <button

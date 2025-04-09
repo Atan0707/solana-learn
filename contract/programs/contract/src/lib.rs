@@ -24,6 +24,15 @@ pub mod contract {
 
         Ok(())
     }
+
+    pub fn decrement(ctx: Context<Decrement>) -> Result<()> {
+        let counter = &mut ctx.accounts.counter;
+        counter.count -= 1;
+
+        msg!("Counter decremented to: {}", counter.count);
+
+        Ok(())
+    }
 }
 
 #[derive(Accounts)]
@@ -31,7 +40,7 @@ pub struct Initialize<'info> {
     #[account(
         init, 
         payer = authority, 
-        space = 8 + 8 + 32,
+        space = 8 + Counter::INIT_SPACE,
         seeds = [b"counter", authority.key().as_ref()],
         bump
     )]
@@ -48,7 +57,15 @@ pub struct Increment<'info> {
     pub authority: Signer<'info>,
 }
 
+#[derive(Accounts)]
+pub struct Decrement<'info> {
+    #[account(mut)]
+    pub counter: Account<'info, Counter>,
+    pub authority: Signer<'info>,
+}
+
 #[account]
+#[derive(InitSpace)]
 pub struct Counter {
     pub count: u64,
     pub authority: Pubkey,
